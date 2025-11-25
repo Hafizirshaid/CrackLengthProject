@@ -11,6 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
 import matplotlib.pyplot as plt
 
+import argparse
 
 # ============================================================
 # DATASET
@@ -63,9 +64,11 @@ class OmniCrackDataset(Dataset):
         img = self.img_tf(img)
         mask = self.mask_tf(mask)
         mask = np.array(mask, dtype=np.uint8)
-        mask = (mask > 0).astype(np.float32)  # binary mask
+        mask = (mask < 128).astype(np.float32)   # cracks = 1, background = 0
+
         mask = torch.from_numpy(mask)         # (H, W)
 
+        
         return img, mask
 
 
@@ -158,14 +161,38 @@ def hybrid_loss(logits, mask):
     return bce + d
 
 
+# def compute_iou(logits, target):
+#     pred = (torch.sigmoid(logits) > 0.5).float()
+#     target = target.unsqueeze(1)
+
+#     inter = (pred * target).sum((2,3))
+#     union = ((pred + target) > 0).float().sum((2,3))
+
+#     return (inter / (union + 1e-6)).mean().item()
+
 def compute_iou(logits, target):
-    pred = (torch.sigmoid(logits) > 0.5).float()
-    target = target.unsqueeze(1)
+    """
+    logits: (B,1,H,W)
+    target: (B,H,W) with values 0 or 1
+    """
+    # binarize predictions
+    pred = (torch.sigmoid(logits) > 0.5).float()   # (B,1,H,W)
 
-    inter = (pred * target).sum((2,3))
-    union = ((pred + target) > 0).float().sum((2,3))
+    # make target (B,1,H,W)
+    if target.dim() == 3:
+        target = target.unsqueeze(1)
 
-    return (inter / (union + 1e-6)).mean().item()
+    # foreground intersection & union (NO true negatives)
+    inter = (pred * target).sum(dim=(2, 3))                # TP
+    union = ((pred + target) > 0).float().sum(dim=(2, 3))  # TP+FP+FN
+
+    # print('pred areas :', pred.sum(dim=(2,3)))
+    # print('target areas :', target.sum(dim=(2,3)))
+    # print('inter :', inter)
+    # print('union :', union)
+    iou = inter / (union + 1e-6)
+    return iou.mean().item()
+
 
 
 def compute_dice(logits, target):
@@ -182,8 +209,8 @@ def compute_dice(logits, target):
 # ============================================================
 # TRAINING LOOP
 # ============================================================
-def train_unet():
-    root = "/Users/hafezirshaid/Desktop/CrackDetectionProject/omnicrack30k"   # TODO: CHANGE THIS
+def train_unet(args=None):
+    root = "dataset/omnicrack30k"   # TODO: CHANGE THIS
     img_size = 256
     batch_size = 4
     lr = 1e-4
@@ -207,6 +234,7 @@ def train_unet():
 
     for epoch in range(1, epochs+1):
         print(f"\nEPOCH {epoch}/{epochs}")
+        step = 0
 
         # ---------------- Train ----------------
         model.train()
@@ -223,6 +251,9 @@ def train_unet():
 
             total += loss.item()
 
+            step += 1
+            if args.max_steps is not None and step >= args.max_steps:
+                break  # stop early for this epoch
         train_loss = total / len(train_loader)
 
         # ---------------- Val ----------------
@@ -232,6 +263,7 @@ def train_unet():
         val_dice = 0
 
         with torch.no_grad():
+            step_val = 0
             for imgs, masks in tqdm(val_loader):
                 imgs = imgs.to(device)
                 masks = masks.to(device)
@@ -240,7 +272,9 @@ def train_unet():
                 total += hybrid_loss(logits, masks).item()
                 val_iou += compute_iou(logits, masks)
                 val_dice += compute_dice(logits, masks)
-
+                step_val += 1
+                if args.max_steps is not None and step_val >= args.max_steps:
+                    break  # stop early for this epoch
         val_loss = total / len(val_loader)
         val_iou /= len(val_loader)
         val_dice /= len(val_loader)
@@ -254,11 +288,11 @@ def train_unet():
         # Save best model
         if val_loss < best_loss:
             best_loss = val_loss
-            torch.save(model.state_dict(), "unet_best.pth")
+            torch.save(model.state_dict(), "checkpoints/unet_best.pth")
             print(" -> Saved new BEST model!")
 
     # Save final model
-    torch.save(model.state_dict(), "unet_last.pth")
+    torch.save(model.state_dict(), "checkpoints/unet_last.pth")
     print("Training finished.")
 
     # ---------------- Plot Loss Curve ----------------
@@ -277,7 +311,12 @@ def train_unet():
 
 
 if __name__ == "__main__":
-    train_unet()
+    parser = argparse.ArgumentParser(description="Train U-Net for crack segmentation")
+    parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs')
+    parser.add_argument('--max_steps', type=int, default=None, help='Maximum training steps (overrides epochs if set)')
+    args = parser.parse_args()
+
+    train_unet(args)
 
 
 

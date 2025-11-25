@@ -11,7 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
 import matplotlib.pyplot as plt
 
-
+from crack_seg import compute_iou, compute_dice, hybrid_loss
 # ============================================================
 # U-NET MODEL
 # ============================================================
@@ -98,33 +98,6 @@ def dice_loss(logits, target, eps=1e-6):
     return 1 - dice.mean()
 
 
-def hybrid_loss(logits, mask):
-    bce = F.binary_cross_entropy_with_logits(logits, mask.unsqueeze(1))
-    d = dice_loss(logits, mask)
-    return bce + d
-
-
-def compute_iou(logits, target):
-    pred = (torch.sigmoid(logits) > 0.5).float()
-    target = target.unsqueeze(1)
-
-    inter = (pred * target).sum((2,3))
-    union = ((pred + target) > 0).float().sum((2,3))
-
-    return (inter / (union + 1e-6)).mean().item()
-
-
-def compute_dice(logits, target):
-    pred = (torch.sigmoid(logits) > 0.5).float()
-    target = target.unsqueeze(1)
-
-    inter = (pred * target).sum((2,3))
-    union = pred.sum((2,3)) + target.sum((2,3))
-
-    dice = (2 * inter) / (union + 1e-6)
-    return dice.mean().item()
-
-
 # ============================================================
 # INFERENCE ON TEST SET
 # ============================================================
@@ -179,13 +152,28 @@ def evaluate_test_set(model_path, root_dir, img_size=256):
             
         # Load original image + mask for visualization
         original_img = Image.open(img_path).convert("RGB")
-        original_mask = Image.open(ann_path).convert("L")
+        # original_mask = Image.open(ann_path).convert("L")
         
-        # Load and preprocess image + mask for inference
+        # # Load and preprocess image + mask for inference
         img = img_tf(original_img).unsqueeze(0).to(device)
-        mask = mask_tf(original_mask)
-        mask = (np.array(mask) > 0).astype(np.float32)
-        mask = torch.from_numpy(mask).unsqueeze(0)   # (1, H, W)
+        # --------- Load mask (correct) ---------
+        original_mask = Image.open(ann_path).convert("L")
+
+        mask_np = np.array(original_mask)
+
+        # cracks are dark (near 0), background is light (near 255)
+        # treat dark pixels as 1 (crack), light pixels as 0
+        mask_np = (mask_np < 128).astype(np.uint8)    # <-- key change
+
+        mask = Image.fromarray(mask_np)
+        mask = mask.resize((img_size, img_size), Image.NEAREST)
+
+        mask = torch.from_numpy(np.array(mask)).float()   # (H,W)
+        mask = mask.unsqueeze(0)   
+
+
+        #print('mask sum:', mask.sum().item())
+        #print('unique mask values:', torch.unique(mask))
 
         with torch.no_grad():
             logits = model(img)
@@ -193,6 +181,9 @@ def evaluate_test_set(model_path, root_dir, img_size=256):
             # Get prediction
             pred_prob = torch.sigmoid(logits)
             pred_mask = (pred_prob > 0.5).float()
+
+            # print(f"sum of pred_mask: {pred_mask.sum().item()}")
+            # print(f"unque pred_mask values: {torch.unique(pred_mask)}")
 
             # loss for reference
             total_loss += hybrid_loss(logits, mask).item()
@@ -214,7 +205,7 @@ def evaluate_test_set(model_path, root_dir, img_size=256):
             axes[0].axis('off')
             
             # Ground truth mask
-            axes[1].imshow(np.array(original_mask), cmap='gray')
+            axes[1].imshow(np.array(mask_np), cmap='gray')
             axes[1].set_title(f'Ground Truth\nMask')
             axes[1].axis('off')
             
@@ -223,9 +214,10 @@ def evaluate_test_set(model_path, root_dir, img_size=256):
             # resize pred_np to match original_mask size
             original_mask_size = original_mask.size  # (width, height)
             pred_resized = np.array(Image.fromarray((pred_np * 255).astype(np.uint8)).resize(original_mask_size, Image.NEAREST)) / 255.0
-
+            
             axes[2].imshow(pred_resized, cmap='gray')
-            axes[2].set_title(f'Prediction Mask')
+            # show IoU and Dice in the prediction plot title (as percentages)
+            axes[2].set_title(f'Prediction Mask\nIoU: {iou*100:.1f}%  Dice: {dice*100:.1f}%')
             axes[2].axis('off')
             
             plt.tight_layout()
@@ -252,7 +244,7 @@ if __name__ == "__main__":
 
     # ------ TEST ------
     evaluate_test_set(
-        model_path="unet_best.pth",
-        root_dir="/Users/hafezirshaid/Desktop/CrackDetectionProject/omnicrack30k",
+        model_path="checkpoints/unet_best.pth",
+        root_dir="dataset/omnicrack30k",
         img_size=256
     )
