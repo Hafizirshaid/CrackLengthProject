@@ -12,6 +12,9 @@ import torchvision.transforms as T
 import matplotlib.pyplot as plt
 
 from crack_seg import compute_iou, compute_dice, hybrid_loss
+import argparse
+from models.vit_based import CrackSegMixtureModel as ViTBasedSegModel
+
 # ============================================================
 # U-NET MODEL
 # ============================================================
@@ -113,7 +116,14 @@ def evaluate_test_set(model_path, root_dir, img_size=256):
     )
 
     # Load model
-    model = UNet().to(device)
+    if args.model == 'unet':
+        model = UNet().to(device)
+    elif args.model == 'vit_based':
+        #from vit_based import ViTBasedModel  # Assuming the ViT-based model is defined in vit_based.py
+        model = ViTBasedSegModel().to(device)
+    else:
+        raise ValueError(f"Unknown model type: {args.model}")
+    
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
@@ -242,9 +252,14 @@ def evaluate_test_set(model_path, root_dir, img_size=256):
 
 if __name__ == "__main__":
 
+    parser = argparse.ArgumentParser(description="U-Net Inference on Test Set")
+    parser.add_argument('--model_path', type=str, default='checkpoints/unet_best.pth', help='Path to the trained U-Net model')
+    parser.add_argument('--model', type=str, default='unet', choices=['unet', 'vit_based'], help='Model type to use')
+    args = parser.parse_args()
+    
     # ------ TEST ------
     evaluate_test_set(
-        model_path="checkpoints/unet_best.pth",
+        model_path=args.model_path,
         root_dir="dataset/omnicrack30k",
         img_size=256
     )

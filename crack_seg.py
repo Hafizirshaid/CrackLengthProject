@@ -11,6 +11,8 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
 import matplotlib.pyplot as plt
 
+from models.vit_based import CrackSegMixtureModel as ViTBasedSegModel
+
 import argparse
 
 # ============================================================
@@ -214,7 +216,7 @@ def train_unet(args=None):
     img_size = 256
     batch_size = 4
     lr = 1e-4
-    epochs = 30
+    epochs = args.epochs
 
     device = "cuda" if torch.cuda.is_available() else "mps"
     print("Device:", device)
@@ -225,7 +227,11 @@ def train_unet(args=None):
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=4)
     val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=4)
 
-    model = UNet().to(device)
+    if args.model == 'unet':
+        model = UNet().to(device)
+    elif args.model == 'vit_based':
+        model = ViTBasedSegModel().to(device)
+
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     train_losses = []
@@ -288,11 +294,11 @@ def train_unet(args=None):
         # Save best model
         if val_loss < best_loss:
             best_loss = val_loss
-            torch.save(model.state_dict(), "checkpoints/unet_best.pth")
+            torch.save(model.state_dict(), f"checkpoints/{args.model}_best.pth")
             print(" -> Saved new BEST model!")
 
     # Save final model
-    torch.save(model.state_dict(), "checkpoints/unet_last.pth")
+    torch.save(model.state_dict(), f"checkpoints/{args.model}_last.pth")
     print("Training finished.")
 
     # ---------------- Plot Loss Curve ----------------
@@ -304,16 +310,17 @@ def train_unet(args=None):
     plt.title("U-Net Training Curve")
     plt.legend()
     plt.grid(True)
-    plt.savefig("loss_curve.png", dpi=200)
+    plt.savefig(f"loss_curve_{args.model}.png", dpi=200)
     plt.show()
 
-    print("Saved loss_curve.png")
-
+    print(f"Saved loss_curve_{args.model}.png")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train U-Net for crack segmentation")
     parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs')
     parser.add_argument('--max_steps', type=int, default=None, help='Maximum training steps (overrides epochs if set)')
+    parser.add_argument('--model', type=str, default='unet', choices=['unet', 'vit_based'], help='Model type to train')
+
     args = parser.parse_args()
 
     train_unet(args)
