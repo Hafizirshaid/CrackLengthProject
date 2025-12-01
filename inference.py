@@ -104,7 +104,7 @@ def dice_loss(logits, target, eps=1e-6):
 # ============================================================
 # INFERENCE ON TEST SET
 # ============================================================
-def evaluate_test_set(model_path, root_dir, img_size=256):
+def evaluate_test_set(model_path, root_dir, img_size=256, args=None):
     """
     Evaluates U-Net on the test dataset using IoU and Dice.
     Assumes:
@@ -150,7 +150,7 @@ def evaluate_test_set(model_path, root_dir, img_size=256):
     count = 0
     
     # Create output directory for plots
-    plot_dir = os.path.join(root_dir, "inference_plots")
+    plot_dir = os.path.join(root_dir, "inference_plots", args.model)
     os.makedirs(plot_dir, exist_ok=True)
     
     for fname in tqdm(test_imgs):
@@ -261,5 +261,6 @@ if __name__ == "__main__":
     evaluate_test_set(
         model_path=args.model_path,
         root_dir="dataset/omnicrack30k",
-        img_size=256
+        img_size=256,
+        args=args
     )
