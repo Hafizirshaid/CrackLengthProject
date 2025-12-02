@@ -50,6 +50,7 @@ def save_segmentation_visualization(
     out_path = save_dir / f"{Path(sample_name).stem}_viz.png"
     plt.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close()
+    print(f"Saved segmentation visualization to {out_path}")
     return out_path
 
 # ============================================================

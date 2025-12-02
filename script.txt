@@ -14,7 +14,6 @@ CUDA_VISIBLE_DEVICES=0 python inference_sam3.py \
   --dataset_root dataset/omnicrack30k \
   --splits test \
   --batch_size 1 \
-  --max_steps 10 \
   --save_masks_dir results/sam3_top10 \
   --binary_threshold 0.5
 

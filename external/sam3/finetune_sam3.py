@@ -96,10 +96,15 @@ def forward_sam3(
     images: torch.Tensor,
     prompt: str,
     device: torch.device,
+    combine_strategy: str = "weighted",
 ) -> torch.Tensor:
     """
     Runs SAM3 on a batch of images with the same text prompt and returns
     a (B, 1, H, W) tensor of combined mask logits.
+
+    combine_strategy:
+        - "weighted": probability-weighted average over all queries (differentiable, used for training)
+        - "top": pick the highest scoring query per image (useful for inference-style evaluation)
     """
     batch_size = images.size(0)
     backbone_out = model.backbone.forward_image(images)
@@ -142,6 +147,16 @@ def forward_sam3(
     else:
         presence = torch.ones_like(class_logits)
     scores = torch.sigmoid(class_logits) * presence
+
+    if combine_strategy == "top":
+        top_idx = scores.argmax(dim=1)
+        batch_idx = torch.arange(batch, device=device)
+        top_logits = mask_logits[batch_idx, top_idx].unsqueeze(1)
+        return top_logits
+
+    if combine_strategy != "weighted":
+        raise ValueError(f"Unknown combine_strategy '{combine_strategy}'")
+
     weights = scores / (scores.sum(dim=1, keepdim=True) + 1e-6)
     weights = weights.unsqueeze(-1).unsqueeze(-1)
     combined_logits = (mask_logits * weights).sum(dim=1, keepdim=True)
@@ -156,6 +171,7 @@ def evaluate_split(
     max_steps: Optional[int],
     use_tqdm: bool = False,
     desc: Optional[str] = None,
+    combine_strategy: str = "weighted",
 ) -> Tuple[float, float, float]:
     model.eval()
     total_loss = 0.0
@@ -169,7 +185,9 @@ def evaluate_split(
         for step, (images, masks) in enumerate(iterator):
             images = images.to(device)
             masks = masks.to(device)
-            logits = forward_sam3(model, images, prompt, device)
+            logits = forward_sam3(
+                model, images, prompt, device, combine_strategy=combine_strategy
+            )
             if logits.shape[-2:] != masks.shape[-2:]:
                 logits = F.interpolate(
                     logits, size=masks.shape[-2:], mode="bilinear", align_corners=False
