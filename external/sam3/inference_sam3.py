@@ -258,6 +258,8 @@ def main(args: argparse.Namespace) -> None:
             args.text_prompt,
             device,
             args.max_steps,
+            use_tqdm=True,
+            desc=f"Eval [{split}]",
         )
 
         need_exports = (save_root is not None) or (viz_root is not None)

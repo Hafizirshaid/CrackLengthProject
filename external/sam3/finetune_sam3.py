@@ -154,14 +154,19 @@ def evaluate_split(
     prompt: str,
     device: torch.device,
     max_steps: Optional[int],
+    use_tqdm: bool = False,
+    desc: Optional[str] = None,
 ) -> Tuple[float, float, float]:
     model.eval()
     total_loss = 0.0
     total_iou = 0.0
     total_dice = 0.0
     count = 0
+    iterator = loader
+    if use_tqdm:
+        iterator = tqdm(loader, desc=desc)
     with torch.no_grad():
-        for step, (images, masks) in enumerate(loader):
+        for step, (images, masks) in enumerate(iterator):
             images = images.to(device)
             masks = masks.to(device)
             logits = forward_sam3(model, images, prompt, device)
