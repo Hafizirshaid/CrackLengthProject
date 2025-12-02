@@ -14,6 +14,43 @@ import matplotlib.pyplot as plt
 from crack_seg import compute_iou, compute_dice, hybrid_loss
 import argparse
 from models.vit_based import CrackSegMixtureModel as ViTBasedSegModel
+from pathlib import Path
+
+
+def save_segmentation_visualization(
+    image: Image.Image,
+    gt_mask: np.ndarray,
+    pred_mask: np.ndarray,
+    sample_name: str,
+    iou: float,
+    dice: float,
+    save_dir: os.PathLike,
+    dpi: int = 150,
+) -> Path:
+    """
+    Saves a triptych visualization (image, GT mask, prediction) and returns the path.
+    Expects gt_mask/pred_mask arrays to share the same spatial size as the PIL image.
+    """
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    axes[0].imshow(image)
+    axes[0].set_title(f"Input Image\n{sample_name}")
+    axes[0].axis("off")
+
+    axes[1].imshow(gt_mask, cmap="gray")
+    axes[1].set_title("Ground Truth\nMask")
+    axes[1].axis("off")
+
+    axes[2].imshow(pred_mask, cmap="gray")
+    axes[2].set_title(f"Prediction Mask\nIoU: {iou*100:.1f}%  Dice: {dice*100:.1f}%")
+    axes[2].axis("off")
+
+    plt.tight_layout()
+    out_path = save_dir / f"{Path(sample_name).stem}_viz.png"
+    plt.savefig(out_path, dpi=dpi, bbox_inches="tight")
+    plt.close()
+    return out_path
 
 # ============================================================
 # U-NET MODEL
@@ -206,36 +243,27 @@ def evaluate_test_set(model_path, root_dir, img_size=256, args=None):
             dice = compute_dice(logits, mask)
             total_dice += dice
             
-            # Create visualization
-            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-            
-            # Original image
-            axes[0].imshow(original_img)
-            axes[0].set_title(f'Input Image\n{fname}')
-            axes[0].axis('off')
-            
-            # Ground truth mask
-            axes[1].imshow(np.array(mask_np), cmap='gray')
-            axes[1].set_title(f'Ground Truth\nMask')
-            axes[1].axis('off')
-            
-            # Prediction
             pred_np = pred_mask.squeeze().cpu().numpy()
-            # resize pred_np to match original_mask size
             original_mask_size = original_mask.size  # (width, height)
-            pred_resized = np.array(Image.fromarray((pred_np * 255).astype(np.uint8)).resize(original_mask_size, Image.NEAREST)) / 255.0
-            
-            axes[2].imshow(pred_resized, cmap='gray')
-            # show IoU and Dice in the prediction plot title (as percentages)
-            axes[2].set_title(f'Prediction Mask\nIoU: {iou*100:.1f}%  Dice: {dice*100:.1f}%')
-            axes[2].axis('off')
-            
-            plt.tight_layout()
-            
-            # Save plot
-            plot_path = os.path.join(plot_dir, f"inference_{fname.replace('.png', '.png')}")
-            plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-            plt.close()  # Close to free memory
+            pred_resized = (
+                np.array(
+                    Image.fromarray((pred_np * 255).astype(np.uint8)).resize(
+                        original_mask_size, Image.NEAREST
+                    )
+                )
+                / 255.0
+            )
+
+            save_segmentation_visualization(
+                original_img,
+                np.array(mask_np),
+                pred_resized,
+                fname,
+                iou,
+                dice,
+                plot_dir,
+                dpi=150,
+            )
 
     # N = len(test_imgs)
     N = 10

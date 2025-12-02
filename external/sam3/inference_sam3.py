@@ -2,7 +2,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -15,8 +15,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from crack_seg import compute_dice, compute_iou, hybrid_loss
-from finetune_sam3 import Sam3CrackDataset, forward_sam3, set_seed
+sys.path.insert(0, str(PROJECT_ROOT))
+from finetune_sam3 import (
+    Sam3CrackDataset,
+    evaluate_split,
+    forward_sam3,
+    set_seed,
+)
+from inference import save_segmentation_visualization
 from sam3.model_builder import build_sam3_image_model
 
 
@@ -35,8 +41,10 @@ def make_loader(
     img_size: int,
     batch_size: int,
     num_workers: int,
+    return_names: bool = False,
 ) -> DataLoader:
-    dataset = Sam3CrackDatasetWithNames(dataset_root, split, img_size=img_size)
+    dataset_cls = Sam3CrackDatasetWithNames if return_names else Sam3CrackDataset
+    dataset = dataset_cls(dataset_root, split, img_size=img_size)
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -47,23 +55,28 @@ def make_loader(
 
 
 @torch.no_grad()
-def run_split_inference(
+def save_split_predictions(
     model: torch.nn.Module,
     loader: DataLoader,
     prompt: str,
     device: torch.device,
     split_name: str,
+    save_dir: Optional[Path],
     max_steps: Optional[int] = None,
-    save_dir: Optional[Path] = None,
     threshold: float = 0.5,
-) -> Dict[str, float]:
+    dataset_root: Optional[Path] = None,
+    viz_dir: Optional[Path] = None,
+    viz_max_samples: int = 16,
+) -> None:
+    if save_dir is None and viz_dir is None:
+        return
     model.eval()
-    total_loss = 0.0
-    total_iou = 0.0
-    total_dice = 0.0
-    num_batches = 0
-    loop = tqdm(loader, desc=f"Inference [{split_name}]")
-
+    if save_dir is not None:
+        save_dir.mkdir(parents=True, exist_ok=True)
+    if viz_dir is not None:
+        viz_dir.mkdir(parents=True, exist_ok=True)
+    loop = tqdm(loader, desc=f"Exporting masks [{split_name}]")
+    viz_count = 0
     for step, batch in enumerate(loop):
         images, masks, names = batch
         images = images.to(device, non_blocking=True)
@@ -78,33 +91,57 @@ def run_split_inference(
                 align_corners=False,
             )
 
-        loss = hybrid_loss(logits, masks)
-        dice = compute_dice(logits, masks)
-        iou = compute_iou(logits, masks)
-
-        total_loss += loss.item()
-        total_dice += dice
-        total_iou += iou
-        num_batches += 1
-        loop.set_postfix(loss=total_loss / num_batches, dice=total_dice / num_batches)
-
-        if save_dir is not None:
-            probs = torch.sigmoid(logits)
-            for prob, name in zip(probs, names):
-                mask_np = (prob.squeeze(0).cpu().numpy() > threshold).astype(np.uint8)
+        probs = torch.sigmoid(logits)
+        bin_preds = (probs > threshold).float()
+        for idx_in_batch, (prob, name) in enumerate(zip(bin_preds, names)):
+            mask_np = prob.squeeze(0).cpu().numpy().astype(np.uint8)
+            if save_dir is not None:
                 Image.fromarray(mask_np * 255).save(save_dir / name)
+
+            if (
+                viz_dir is not None
+                and dataset_root is not None
+                and viz_count < viz_max_samples
+            ):
+                img_path = dataset_root / "images" / split_name / name
+                ann_path = dataset_root / "annotations" / split_name / name
+                if not img_path.exists() or not ann_path.exists():
+                    continue
+
+                original_img = Image.open(img_path).convert("RGB")
+                gt_mask = Image.open(ann_path).convert("L")
+                gt_mask_np = (np.array(gt_mask) < 128).astype(np.uint8)
+
+                pred_resized = (
+                    np.array(
+                        Image.fromarray((mask_np * 255).astype(np.uint8)).resize(
+                            original_img.size, Image.NEAREST
+                        )
+                    )
+                    / 255.0
+                )
+                pred_binary = (pred_resized > 0.5).astype(np.uint8)
+                inter = np.logical_and(pred_binary, gt_mask_np).sum()
+                union = np.logical_or(pred_binary, gt_mask_np).sum()
+                iou = float(inter / (union + 1e-6)) if union > 0 else 0.0
+                denom = pred_binary.sum() + gt_mask_np.sum()
+                dice = (
+                    float((2 * inter) / (denom + 1e-6)) if denom > 0 else 0.0
+                )
+
+                save_segmentation_visualization(
+                    original_img,
+                    gt_mask_np,
+                    pred_resized,
+                    name,
+                    iou,
+                    dice,
+                    viz_dir,
+                )
+                viz_count += 1
 
         if max_steps is not None and (step + 1) >= max_steps:
             break
-
-    if num_batches == 0:
-        return {"loss": 0.0, "iou": 0.0, "dice": 0.0}
-
-    return {
-        "loss": total_loss / num_batches,
-        "iou": total_iou / num_batches,
-        "dice": total_dice / num_batches,
-    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -158,6 +195,18 @@ def parse_args() -> argparse.Namespace:
         help="If set, writes binary predictions for each split to this folder.",
     )
     parser.add_argument(
+        "--viz_dir",
+        type=str,
+        default="viz_sam3",
+        help="Optional directory for triptych visualizations (image/GT/pred).",
+    )
+    parser.add_argument(
+        "--viz_max_images",
+        type=int,
+        default=16,
+        help="Maximum number of visualizations to save per split.",
+    )
+    parser.add_argument(
         "--binary_threshold",
         type=float,
         default=0.5,
@@ -170,6 +219,7 @@ def parse_args() -> argparse.Namespace:
 def main(args: argparse.Namespace) -> None:
     set_seed(args.seed)
     device = torch.device(args.device)
+    dataset_root_path = Path(args.dataset_root)
 
     model = build_sam3_image_model(
         device=device.type,
@@ -187,31 +237,66 @@ def main(args: argparse.Namespace) -> None:
         save_root = Path(args.save_masks_dir)
         save_root.mkdir(parents=True, exist_ok=True)
 
+    viz_root: Optional[Path] = None
+    if args.viz_dir is not None:
+        viz_root = Path(args.viz_dir)
+        viz_root.mkdir(parents=True, exist_ok=True)
+
     all_results: List[str] = []
     for split in args.splits:
-        loader = make_loader(
-            args.dataset_root, split, args.img_size, args.batch_size, args.num_workers
+        metrics_loader = make_loader(
+            str(dataset_root_path),
+            split,
+            args.img_size,
+            args.batch_size,
+            args.num_workers,
+            return_names=False,
         )
-        split_save_dir = None
-        if save_root is not None:
-            split_save_dir = save_root / split
-            split_save_dir.mkdir(parents=True, exist_ok=True)
-
-        metrics = run_split_inference(
+        metrics = evaluate_split(
             model,
-            loader,
+            metrics_loader,
             args.text_prompt,
             device,
-            split_name=split,
-            max_steps=args.max_steps,
-            save_dir=split_save_dir,
-            threshold=args.binary_threshold,
+            args.max_steps,
         )
+
+        need_exports = (save_root is not None) or (viz_root is not None)
+        if need_exports:
+            export_loader = make_loader(
+                str(dataset_root_path),
+                split,
+                args.img_size,
+                args.batch_size,
+                args.num_workers,
+                return_names=True,
+            )
+            split_save_dir = None
+            split_viz_dir = None
+            if save_root is not None:
+                split_save_dir = save_root / split
+                split_save_dir.mkdir(parents=True, exist_ok=True)
+            if viz_root is not None:
+                split_viz_dir = viz_root / split
+                split_viz_dir.mkdir(parents=True, exist_ok=True)
+            save_split_predictions(
+                model,
+                export_loader,
+                args.text_prompt,
+                device,
+                split_name=split,
+                save_dir=split_save_dir,
+                max_steps=args.max_steps,
+                threshold=args.binary_threshold,
+                dataset_root=dataset_root_path,
+                viz_dir=split_viz_dir,
+                viz_max_samples=args.viz_max_images,
+            )
+
         summary = (
             f"[{split}] "
-            f"loss={metrics['loss']:.4f} | "
-            f"IoU={metrics['iou']:.4f} | "
-            f"Dice={metrics['dice']:.4f}"
+            f"loss={metrics[0]:.4f} | "
+            f"IoU={metrics[1]:.4f} | "
+            f"Dice={metrics[2]:.4f}"
         )
         print(summary)
         all_results.append(summary)
