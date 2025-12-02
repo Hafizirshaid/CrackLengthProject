@@ -1,0 +1,18 @@
+python crack_seg.py --epochs 3 --max_steps 50
+
+python inference.py --model vit_based --model_path checkpoints/vit_based_best.pth
+
+python inference.py --model unet --model_path checkpoints/unet_best.pth
+
+sam3 
+>
+CUDA_VISIBLE_DEVICES=1 python finetune_sam3.py --epochs 2 --max_steps 5
+
+CUDA_VISIBLE_DEVICES=1 python inference_sam3.py \
+  --dataset_root dataset/omnicrack30k \
+  --splits test \
+  --checkpoint_path checkpoints/external_EMT/OmniCrack_EMT.pth \
+  --batch_size 1 \
+  --max_steps 10 \
+  --save_masks_dir results/sam3_top10 \
+  --binary_threshold 0.5
