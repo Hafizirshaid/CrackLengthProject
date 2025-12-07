@@ -17,9 +17,13 @@ from sam3.model_builder import build_sam3_image_model
 from sam3.model.sam3_image_processor import Sam3Processor
 
 
-def load_binary_mask(path: Path) -> np.ndarray:
-    mask = Image.open(path).convert("L")
-    mask_np = (np.array(mask) < 128).astype(np.uint8)
+def load_binary_mask(
+    path: Path, target_size: Optional[Tuple[int, int]] = None
+) -> np.ndarray:
+    mask_img = Image.open(path).convert("L")
+    if target_size is not None:
+        mask_img = mask_img.resize(target_size, Image.NEAREST)
+    mask_np = (np.array(mask_img) < 128).astype(np.uint8)
     return mask_np
 
 
@@ -43,7 +47,7 @@ def infer_single_image(
     processor: Sam3Processor,
     image_path: Path,
     prompt: str,
-    score_threshold: float,   # <-- ignored now
+    score_threshold: float,  # kept for CLI compatibility
 ):
     image = Image.open(image_path).convert("RGB")
     state = processor.set_image(image)
@@ -90,6 +94,20 @@ def infer_single_image(
     return combined, best_score, image, masks, boxes, scores
 
 
+def saved_score_path(mask_path: Path) -> Path:
+    return mask_path.with_name(mask_path.name + ".score")
+
+
+def read_saved_score(mask_path: Path) -> Optional[float]:
+    score_file = saved_score_path(mask_path)
+    if not score_file.exists():
+        return None
+    try:
+        return float(score_file.read_text().strip())
+    except Exception:
+        return None
+
+
 
 def list_images(folder: Path) -> List[Path]:
     exts = {".png", ".jpg", ".jpeg", ".bmp"}
@@ -106,6 +124,7 @@ def run_split(
     max_images: Optional[int],
     viz_root: Optional[Path],
     viz_max_images: int,
+    overwrite: bool,
 ) -> Tuple[float, float, float]:
     img_dir = dataset_root / "images" / split
     ann_dir = dataset_root / "annotations" / split
@@ -121,6 +140,7 @@ def run_split(
     total_iou = 0.0
     total_dice = 0.0
     total_score = 0.0
+    score_count = 0
     count = 0
 
     split_save_dir = save_root / split if save_root is not None else None
@@ -133,22 +153,33 @@ def run_split(
     viz_count = 0
 
     for img_path in tqdm(image_paths, desc=f"Inference [{split}]"):
-        pred_mask, score, pil_image, _, _, _ = infer_single_image(
-            processor, img_path, prompt, score_threshold
-        )
+        mask_path_out = split_save_dir / img_path.name if split_save_dir else None
         gt_mask_path = ann_dir / img_path.name
         if not gt_mask_path.exists():
             raise FileNotFoundError(f"Missing annotation for {img_path.name}")
-        gt_mask = load_binary_mask(gt_mask_path)
+
+        if mask_path_out is not None and mask_path_out.exists() and not overwrite:
+            pil_image = Image.open(img_path).convert("RGB")
+            pred_mask = load_binary_mask(mask_path_out, target_size=pil_image.size)
+            gt_mask = load_binary_mask(gt_mask_path, target_size=pil_image.size)
+            score = read_saved_score(mask_path_out)
+        else:
+            pred_mask, score, pil_image, _, _, _ = infer_single_image(
+                processor, img_path, prompt, score_threshold
+            )
+            gt_mask = load_binary_mask(gt_mask_path, target_size=pil_image.size)
+            if mask_path_out is not None:
+                save_binary_mask(pred_mask, mask_path_out)
+                saved_score_path(mask_path_out).write_text(f"{score:.6f}\n")
 
         iou, dice = compute_metrics(pred_mask, gt_mask)
         total_iou += iou
         total_dice += dice
-        total_score += score
         count += 1
 
-        if split_save_dir is not None:
-            save_binary_mask(pred_mask, split_save_dir / img_path.name)
+        if score is not None:
+            total_score += score
+            score_count += 1
 
         if (
             split_viz_dir is not None
@@ -168,7 +199,8 @@ def run_split(
     if count == 0:
         return 0.0, 0.0, 0.0
 
-    return total_iou / count, total_dice / count, total_score / count
+    avg_score = total_score / score_count if score_count > 0 else 0.0
+    return total_iou / count, total_dice / count, avg_score
 
 
 def parse_args() -> argparse.Namespace:
@@ -221,6 +253,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="results/sam3_inference",
         help="Directory where predicted masks are stored.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Recompute predictions even if mask files already exist.",
     )
     parser.add_argument(
         "--viz_dir",
@@ -285,6 +322,7 @@ def main(args: argparse.Namespace) -> None:
             args.max_images,
             viz_root,
             args.viz_max_images,
+            args.overwrite,
         )
         summary = (
             f"[{split}] IoU={avg_iou:.4f} | Dice={avg_dice:.4f} | "

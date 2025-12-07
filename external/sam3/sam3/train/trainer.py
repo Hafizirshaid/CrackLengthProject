@@ -806,7 +806,19 @@ class Trainer:
             # )  # move tensors in a tensorclass
 
             try:
-                self._run_step(batch, phase, loss_mts, extra_loss_mts)
+                did_backward = self._run_step(batch, phase, loss_mts, extra_loss_mts)
+
+                if not did_backward:
+                    logging.warning(
+                        "Skipping optimizer update because no backward pass was performed in this iteration."
+                    )
+                    batch_time_meter.update(time.time() - end)
+                    end = time.time()
+                    self.time_elapsed_meter.update(
+                        time.time() - self.start_time + self.ckpt_time_elapsed
+                    )
+                    mem_meter.update(reset_peak_usage=True)
+                    continue
 
                 # compute gradient and do optim step
                 exact_epoch = self.epoch + float(data_iter) / iters_per_epoch
@@ -909,7 +921,7 @@ class Trainer:
         loss_mts: Dict[str, AverageMeter],
         extra_loss_mts: Dict[str, AverageMeter],
         raise_on_error: bool = True,
-    ):
+    ) -> bool:
         """
         Run the forward / backward
         """
@@ -931,6 +943,7 @@ class Trainer:
             accum_steps = 1
             batch = [batch]
 
+        did_backward = False
         for i, chunked_batch in enumerate(batch):
             ddp_context = (
                 self.model.no_sync()
@@ -960,7 +973,9 @@ class Trainer:
                     else:
                         return
 
-                self.scaler.scale(loss).backward()
+                if loss_key not in loss_mts:
+                    loss_mts[loss_key] = AverageMeter(loss_key, self.device, ":.2e")
+
                 loss_mts[loss_key].update(loss.item(), batch_size)
                 for extra_loss_key, extra_loss in extra_losses.items():
                     if extra_loss_key not in extra_loss_mts:
@@ -968,6 +983,17 @@ class Trainer:
                             extra_loss_key, self.device, ":.2e"
                         )
                     extra_loss_mts[extra_loss_key].update(extra_loss.item(), batch_size)
+
+                if not loss.requires_grad:
+                    logging.warning(
+                        "Skipping backward because loss tensor has no grad_fn (likely empty batch)."
+                    )
+                    continue
+
+                self.scaler.scale(loss).backward()
+                did_backward = True
+
+        return did_backward
 
     def _log_meters_and_save_best_ckpts(self, phases: List[str]):
         logging.info("Synchronizing meters")

@@ -17,3 +17,36 @@ CUDA_VISIBLE_DEVICES=0 python inference_sam3.py \
   --save_masks_dir results/sam3_top10 \
   --binary_threshold 0.5
 
+source ~/uv_envs/crack/bin/activate   # or `conda activate crack`
+cd external/sam3
+python finetune_sam3.py --limit_train_images 5 --limit_val_images 5 --limit_test_images 5 --force_coco 
+
+
+source /egr/research-zijunlab/lehoang2/uv_envs/crack/bin/activate
+
+python finetune_sam3.py \
+  --coco_dir dataset/coco_debug \
+  --limit_train_images 100 \
+  --limit_val_images 100 \
+  --limit_test_images 100 \
+  --force_coco \
+  --skip_inference \
+  --epochs 1 \
+  --batch_size 1 \
+  --val_batch_size 1 \
+  --max_infer_images 5 \
+  --inference_splits train val test
+
+CRACKLEN 
+python train_eval_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model unet\
+  --seg_ckpt checkpoints/unet_best.pth\
+  --epochs 100\
+  --max_steps 2
+
+python train_eval_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model vit_based\
+  --seg_ckpt checkpoints/vit_based_best.pth\
+  --epochs 100

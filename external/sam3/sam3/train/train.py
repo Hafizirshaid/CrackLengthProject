@@ -138,8 +138,14 @@ def add_pythonpath_to_sys_path():
     sys.path = os.environ["PYTHONPATH"].split(":") + sys.path
 
 
+def _normalize_config_name(config_name: str) -> str:
+    if config_name.startswith("train/"):
+        return config_name[len("train/") :]
+    return config_name
+
+
 def main(args) -> None:
-    cfg = compose(config_name=args.config)
+    cfg = compose(config_name=_normalize_config_name(args.config))
     if cfg.launcher.experiment_log_dir is None:
         cfg.launcher.experiment_log_dir = os.path.join(
             os.getcwd(), "sam3_logs", args.config

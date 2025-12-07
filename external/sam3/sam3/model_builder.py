@@ -779,9 +779,17 @@ def build_sam3_video_model(
             ckpt, strict=strict_state_dict_loading
         )
         if missing_keys:
-            print(f"Missing keys: {missing_keys}")
+            preview = ", ".join(list(missing_keys)[:5])
+            print(
+                f"Missing keys ({len(missing_keys)} total): {preview}"
+                + (" ..." if len(missing_keys) > 5 else "")
+            )
         if unexpected_keys:
-            print(f"Unexpected keys: {unexpected_keys}")
+            preview = ", ".join(list(unexpected_keys)[:5])
+            print(
+                f"Unexpected keys ({len(unexpected_keys)} total): {preview}"
+                + (" ..." if len(unexpected_keys) > 5 else "")
+            )
 
     model.to(device=device)
     return model

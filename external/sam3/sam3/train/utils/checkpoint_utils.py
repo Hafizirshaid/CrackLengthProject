@@ -291,6 +291,15 @@ def load_checkpoint_and_apply_kernels(
     return pre_train_dict
 
 
+def _summarize_keys(keys, max_items=5):
+    if not keys:
+        return ""
+    keys = list(keys)
+    preview = ", ".join(keys[:max_items])
+    suffix = " ..." if len(keys) > max_items else ""
+    return f"{preview}{suffix}"
+
+
 def check_load_state_dict_errors(
     missing_keys,
     unexpected_keys,
@@ -314,9 +323,15 @@ def check_load_state_dict_errors(
 
     err = "State key mismatch."
     if unexpected_keys:
-        err += f" Unexpected keys: {unexpected_keys}."
+        err += (
+            f" Unexpected keys ({len(unexpected_keys)} total): "
+            f"{_summarize_keys(unexpected_keys)}."
+        )
     if missing_keys:
-        err += f" Missing keys: {missing_keys}."
+        err += (
+            f" Missing keys ({len(missing_keys)} total): "
+            f"{_summarize_keys(missing_keys)}."
+        )
 
     if unexpected_keys or missing_keys:
         logging.warning(err)

@@ -213,8 +213,11 @@ def unix_module_cls_pattern_to_parameter_names(
         assert (
             len(matching_parameters) > 0
         ), f"module_cls_name {module_cls_name} does not contain any parameters in the model"
+        preview = ", ".join(list(matching_parameters)[:5])
         logging.info(
-            f"Matches for module_cls_name [{module_cls_name}]: {matching_parameters} "
+            f"Matches for module_cls_name [{module_cls_name}] "
+            f"({len(matching_parameters)} total): {preview}"
+            + (" ..." if len(matching_parameters) > 5 else "")
         )
         allowed_parameter_names.append(matching_parameters)
     return set.union(*allowed_parameter_names)
@@ -241,7 +244,12 @@ def unix_param_pattern_to_parameter_names(
         assert (
             len(matching_parameters) >= 1
         ), f"param_name {param_name} does not match any parameters in the model"
-        logging.info(f"Matches for param_name [{param_name}]: {matching_parameters}")
+        preview = ", ".join(list(matching_parameters)[:5])
+        logging.info(
+            f"Matches for param_name [{param_name}] "
+            f"({len(matching_parameters)} total): {preview}"
+            + (" ..." if len(matching_parameters) > 5 else "")
+        )
         allowed_parameter_names.append(matching_parameters)
     return set.union(*allowed_parameter_names)
 
