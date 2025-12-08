@@ -20,6 +20,8 @@ from models.crack_len_model import create_crack_len_model
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
+from utils import log_eval_result
+
 def make_loaders(
     root: str,
     img_size: int,
@@ -138,6 +140,10 @@ def train_one_epoch(
         masks = masks.to(device)
         lengths = lengths.to(device)
 
+        # 🔧 Ensure masks are (B, H, W), not (B, 1, H, W)
+        if masks.dim() == 4 and masks.size(1) == 1:
+            masks = masks.squeeze(1)
+
         optimizer.zero_grad()
         seg_logits, len_pred = model(imgs)
 
@@ -156,7 +162,6 @@ def train_one_epoch(
         _aggregate_update(agg, seg_logits, masks, len_pred, lengths,
                           seg_loss, len_loss, total_loss)
 
-        # update progress bar text
         pbar.set_postfix({
             "tot": f"{total_loss.item():.4f}",
             "len": f"{len_loss.item():.4f}"
@@ -165,7 +170,7 @@ def train_one_epoch(
     return _aggregate_finalize(agg)
 
 
-@torch.no_grad()
+
 @torch.no_grad()
 def eval_one_epoch(
     model,
@@ -184,12 +189,17 @@ def eval_one_epoch(
         masks = masks.to(device)
         lengths = lengths.to(device)
 
+        
+        if masks.dim() == 4 and masks.size(1) == 1:
+            masks = masks.squeeze(1)
+
         seg_logits, len_pred = model(imgs)
         len_loss = F.mse_loss(len_pred, lengths)
 
         if train_mode == "joint":
             seg_loss = hybrid_loss(seg_logits, masks)
             total_loss = seg_loss + alpha_len * len_loss
+            #print('seg loss:', seg_loss.item(), 'len loss:', len_loss.item())
         else:
             seg_loss = torch.tensor(0.0, device=device)
             total_loss = len_loss
@@ -255,7 +265,12 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
 
     parser.add_argument("--device", type=str, default="cuda")
-
+    parser.add_argument(
+        "--result_path",
+        type=str,
+        default="results/crack_len.csv",
+        help="Path to save eval results CSV",
+    )
     args = parser.parse_args()
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
@@ -301,8 +316,18 @@ def main():
     best_ckpt = os.path.join("checkpoints", f"{run_name}_best_len_rmse.pth")
     best_val_rmse = float("inf")
 
-    train_curve = []
-    val_curve = []
+    # train_curve = []
+    # val_curve = []
+
+    history = {
+        "train_total": [],
+        "train_seg": [],
+        "train_len": [],
+        "val_total": [],
+        "val_seg": [],
+        "val_len": [],
+    }
+
 
 
     for epoch in range(1, args.epochs + 1):
@@ -346,19 +371,29 @@ def main():
             torch.save(model.state_dict(), best_ckpt)
             print(f">>> New best val len RMSE {best_val_rmse:.4f}, saved to {best_ckpt}")
 
-        train_curve.append(train_stats["total_loss"])
-        val_curve.append(val_stats["total_loss"])
+        history["train_total"].append(train_stats["total_loss"])
+        history["train_seg"].append(train_stats["seg_loss"])
+        history["train_len"].append(train_stats["len_loss"])
+
+        history["val_total"].append(val_stats["total_loss"])
+        history["val_seg"].append(val_stats["seg_loss"])
+        history["val_len"].append(val_stats["len_loss"])
+
     print("\n[Done] Best val len RMSE:", best_val_rmse)
 
-    plt.figure(figsize=(8,5))
-    plt.plot(train_curve, label="Train Total Loss", marker="o")
-    plt.plot(val_curve, label="Val Total Loss", marker="o")
+    # plot loss curves
+    plt.figure(figsize=(10, 6))
+    plt.plot(history["train_total"], label="Train Total Loss")
+    plt.plot(history["val_total"], label="Val Total Loss")
+    plt.plot(history["train_len"], label="Train Length Loss")
+    plt.plot(history["val_len"], label="Val Length Loss")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.title("Crack Length Model Training Curve")
+    plt.title(f"Loss Curves for {run_name}")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
+
 
     os.makedirs("plots", exist_ok=True)
     curve_path = f"plots/{run_name}_loss_curve.png"
@@ -385,6 +420,19 @@ def main():
           f"IoU={test_stats['iou']:.4f} | "
           f"Dice={test_stats['dice']:.4f}")
 
-
+    columns = {
+        'model': args.model,
+        'train_mode': args.train_mode,
+        'alpha_len': args.alpha_len,
+        'best_val_len_rmse': best_val_rmse,
+        'test_total_loss': test_stats['total_loss'],
+        'test_seg_loss': test_stats['seg_loss'],
+        'test_len_loss': test_stats['len_loss'],
+        'test_len_rmse': test_stats['len_rmse'],
+        'test_len_mae': test_stats['len_mae'],
+        'test_iou': test_stats['iou'],
+        'test_dice': test_stats['dice'],
+    }
+    log_eval_result(columns, csv_path=args.result_path)
 if __name__ == "__main__":
     main()
