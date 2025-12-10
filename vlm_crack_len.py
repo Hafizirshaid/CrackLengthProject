@@ -1,6 +1,7 @@
 import os
 import csv
 import re
+import json
 import numpy as np
 import torch
 from tqdm.auto import tqdm
@@ -10,23 +11,43 @@ from transformers import (
     AutoModelForImageTextToText,
     AutoModelForVision2Seq,
     AutoProcessor,
+    Blip2ForConditionalGeneration,
+    Blip2Processor,
+    InstructBlipForConditionalGeneration,
+    InstructBlipProcessor,
 )
 
 from dataset import KaggleCrackLenDataset
 from train_eval_crack_len import make_loaders
 
 
+# -----------------------------
+# Utils
+# -----------------------------
 def parse_float_from_text(text: str) -> float:
+    text = text.strip()
+    if text == "":
+        return float("nan")
+
     m = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)
     if m:
         try:
-            return float(m.group(0))
+            val = float(m.group(0))
+            # crack length can't be negative
+            return max(val, 0.0)
         except ValueError:
             return float("nan")
     return float("nan")
 
 
 def build_chat_texts(processor, prompts):
+    """
+    Try to build chat-style prompts if the processor supports it.
+    If not (e.g., BLIP-2 / InstructBLIP), just return the raw prompts.
+    """
+    if not hasattr(processor, "apply_chat_template"):
+        return prompts
+
     conversations = []
     for p in prompts:
         conversations.append(
@@ -41,14 +62,21 @@ def build_chat_texts(processor, prompts):
             ]
         )
 
-    chat_texts = processor.apply_chat_template(
-        conversations,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    return chat_texts
+    try:
+        chat_texts = processor.apply_chat_template(
+            conversations,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        return chat_texts
+    except (ValueError, TypeError):
+        # Processor has no usable chat template → fall back to plain prompts
+        return prompts
 
 
+# -----------------------------
+# Inference
+# -----------------------------
 def infer_vlm_on_test(test_loader, model, processor, device="cuda", model_name=""):
     model.eval()
     preds, gts = [], []
@@ -62,25 +90,31 @@ def infer_vlm_on_test(test_loader, model, processor, device="cuda", model_name="
             base_prompt = (
                 "You are measuring concrete cracks. "
                 "Estimate the total crack length in this image in centimeters. "
-                "Answer with only a single number (no units, no extra text)."
+                "Respond with ONLY a single numeric value such as 12.3. "
+                "Do not output any words or units."
             )
             prompts = [base_prompt] * len(pil_imgs)
 
-            chat_texts = build_chat_texts(processor, prompts)
+            texts_in = build_chat_texts(processor, prompts)
 
             inputs = processor(
                 images=pil_imgs,
-                text=chat_texts,
+                text=texts_in,
                 return_tensors="pt",
                 padding=True,
             ).to(device)
 
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=8,
+                max_new_tokens=6,
                 do_sample=False,
+                num_beams=1,
             )
             texts = processor.batch_decode(outputs, skip_special_tokens=True)
+
+            # Uncomment for debugging raw outputs
+            # for raw in texts:
+            #     print("[RAW VLM ANSWER]", repr(raw))
 
             for txt, gt in zip(texts, lengths):
                 preds.append(parse_float_from_text(txt))
@@ -111,6 +145,9 @@ def infer_vlm_on_test(test_loader, model, processor, device="cuda", model_name="
     return preds, gts
 
 
+# -----------------------------
+# Model loader
+# -----------------------------
 def load_vlm(model_name: str, device: str = "cuda"):
     """
     Map short aliases -> real HF repo IDs and load with the right class.
@@ -118,12 +155,15 @@ def load_vlm(model_name: str, device: str = "cuda"):
     name_lower = model_name.lower()
 
     # --- Alias mapping ---
-    # you can extend this dict with more aliases
     alias_map = {
         "qwen2.5-vl": "Qwen/Qwen2.5-VL-7B-Instruct",
         "qwen2.5-vl-7b": "Qwen/Qwen2.5-VL-7B-Instruct",
         "deepseek-vl": "deepseek-ai/DeepSeek-VL2",
         "llava-1.5-7b": "llava-hf/llava-1.5-7b-hf",
+        "blip2": "Salesforce/blip2-flan-t5-xl",
+        "blip2-flan-t5-xl": "Salesforce/blip2-flan-t5-xl",
+        "instructblip": "Salesforce/instructblip-flan-t5-xl",
+        "instructblip-flan-t5-xl": "Salesforce/instructblip-flan-t5-xl",
     }
     if model_name in alias_map:
         hf_id = alias_map[model_name]
@@ -147,7 +187,7 @@ def load_vlm(model_name: str, device: str = "cuda"):
         print(f"[Model] Loading Qwen-VL-style model: {model_name}")
         model = AutoModelForVision2Seq.from_pretrained(
             model_name,
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             device_map="auto",
             trust_remote_code=True,
         )
@@ -157,14 +197,14 @@ def load_vlm(model_name: str, device: str = "cuda"):
         )
         return model, processor
 
-    # --- DeepSeek-VL2 family ---
-    if "deepseek-vl2" in name_lower or "deepseek-vl" in name_lower:
-        print(f"[Model] Loading DeepSeek-VL2-style model: {model_name}")
-        model = AutoModelForImageTextToText.from_pretrained(
+    # --- DeepSeek-VL family (Vision2Seq + trust_remote_code) ---
+    if "deepseek-vl" in name_lower or "deepseek-vl2" in name_lower:
+        print(f"[Model] Loading DeepSeek-VL-style model: {model_name}")
+        model = AutoModelForVision2Seq.from_pretrained(
             model_name,
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             device_map="auto",
-            trust_remote_code=True,  # IMPORTANT
+            trust_remote_code=True,
         )
         processor = AutoProcessor.from_pretrained(
             model_name,
@@ -172,6 +212,27 @@ def load_vlm(model_name: str, device: str = "cuda"):
         )
         return model, processor
 
+    # --- BLIP-2 family (single-GPU) ---
+    if "salesforce/blip2" in name_lower or name_lower.startswith("blip2"):
+        print(f"[Model] Loading BLIP-2 model: {model_name}")
+        model = Blip2ForConditionalGeneration.from_pretrained(
+            model_name,
+            dtype=torch.float16,
+        )
+        model = model.to(device)
+        processor = Blip2Processor.from_pretrained(model_name)
+        return model, processor
+
+    # --- InstructBLIP family (single-GPU) ---
+    if "salesforce/instructblip" in name_lower or name_lower.startswith("instructblip"):
+        print(f"[Model] Loading InstructBLIP model: {model_name}")
+        model = InstructBlipForConditionalGeneration.from_pretrained(
+            model_name,
+            dtype=torch.float16,
+        )
+        model = model.to(device)
+        processor = InstructBlipProcessor.from_pretrained(model_name)
+        return model, processor
 
     # --- Generic fallback ---
     print(f"[Model] Loading generic VLM with AutoModelForImageTextToText: {model_name}")
@@ -189,6 +250,9 @@ def load_vlm(model_name: str, device: str = "cuda"):
     return model, processor
 
 
+# -----------------------------
+# Main
+# -----------------------------
 if __name__ == "__main__":
     import argparse
 
@@ -206,10 +270,12 @@ if __name__ == "__main__":
         help=(
             "HF model id or short alias. "
             "Examples: llava-hf/llava-1.5-7b-hf, qwen2.5-vl, "
-            "Qwen/Qwen2.5-VL-7B-Instruct, deepseek-vl"
+            "Qwen/Qwen2.5-VL-7B-Instruct, deepseek-vl, blip2, instructblip"
         ),
     )
     parser.add_argument("--out_csv", type=str, default=None)
+    parser.add_argument("--out_json", type=str, default=None)
+
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -227,6 +293,7 @@ if __name__ == "__main__":
 
     # Load chosen VLM (supports aliases)
     model, processor = load_vlm(args.model, device=device)
+    # NOTE: don't call model.to(device) here; handled inside load_vlm.
 
     preds, gts = infer_vlm_on_test(
         test_loader=test_loader,
@@ -236,6 +303,18 @@ if __name__ == "__main__":
         model_name=args.model,
     )
 
+    result_json = {"results": []}
+    for i in range(len(gts)):
+        result_json["results"].append(
+            {
+                "gt": float(gts[i]),
+                "pred": float(preds[i]),
+            }
+        )
+
+    result_json["rmse"] = float(np.sqrt(np.mean((preds - gts) ** 2)))
+    result_json["mae"] = float(np.mean(np.abs(preds - gts)))
+
     if args.out_csv is not None and preds.size > 0:
         os.makedirs(os.path.dirname(args.out_csv), exist_ok=True)
         with open(args.out_csv, "w", newline="") as f:
@@ -244,3 +323,10 @@ if __name__ == "__main__":
             for i, (gt, pred) in enumerate(zip(gts, preds)):
                 w.writerow([i, gt, pred])
         print("Saved CSV to:", args.out_csv)
+
+    if args.out_json is not None and preds.size > 0:
+        out_json_path = args.out_json
+        os.makedirs(os.path.dirname(out_json_path), exist_ok=True)
+        with open(out_json_path, "w") as f:
+            json.dump(result_json, f, indent=4)
+        print("Saved results JSON to:", out_json_path)

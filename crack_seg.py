@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.unet import UNet
 from models.vit_based import CrackSegMixtureModel as ViTBasedSegModel
+#from models.vit_based import CrackSegMixtureModel2 as ViTBasedSegModel2
 from models.mask_rcnn import get_model_instance_segmentation
 from models.unet_resnet import get_unet_resnet50
 from dataset import OmniCrackDataset
@@ -93,7 +94,7 @@ def compute_dice(logits, target):
 # TRAINING LOOP
 # ============================================================
 def train_unet(args=None):
-    root = "/mnt/home/irshaid2/crack_seg/omnicrack30k"   # TODO: CHANGE THIS
+    root = "dataset/omnicrack30k"   # TODO: CHANGE THIS
     img_size = 256
     batch_size = args.batch_size
     lr = args.lr
@@ -119,7 +120,9 @@ def train_unet(args=None):
     if args.model == 'unet':
         model = UNet().to(device)
     elif args.model == 'vit_based':
-        model = ViTBasedSegModel().to(device)
+        model = ViTBasedSegModel(embed_dim=args.embed_dim, num_heads=args.num_heads, mlp_ratio=args.mlp_ratio).to(device)
+    elif args.model == 'vit_based2':
+        model = ViTBasedSegModel2(embed_dim=args.embed_dim, num_heads=args.num_heads, mlp_ratio=args.mlp_ratio).to(device)
     elif args.model == 'mask_rcnn':
         model = get_model_instance_segmentation(num_classes=2).to(device)
     elif args.model == "unet_resnet":
@@ -235,8 +238,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train U-Net for crack segmentation")
     parser.add_argument('--epochs', type=int, default=40, help='Number of training epochs')
     parser.add_argument('--max_steps', type=int, default=None, help='Maximum training steps (overrides epochs if set)')
-    parser.add_argument('--model', type=str, default='unet_resnet', choices=['unet', 'vit_based', 'mask_rcnn', 'unet_resnet'], help='Model type to train')
+    parser.add_argument('--model', type=str, default='unet_resnet', choices=['unet', 'vit_based', 'mask_rcnn', 'unet_resnet', 'vit_based2'], help='Model type to train')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--batch_size', type=int, default=4, help='Batch size for training')
+
+    parser.add_argument('--embed_dim', type=int, default=128, help='Embedding dimension for ViT-based model')
+    parser.add_argument('--num_heads', type=int, default=4, help='Number of attention heads for ViT-based model')
+    parser.add_argument('--mlp_ratio', type=float, default=4.0, help='MLP ratio for ViT-based model')
+
+
     args = parser.parse_args()
     train_unet(args)

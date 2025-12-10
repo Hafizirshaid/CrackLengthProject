@@ -1,5 +1,20 @@
 python crack_seg.py --epochs 3 --max_steps 50
 
+
+python crack_seg.py\
+  --epochs 50\
+  --model vit_based\
+  --embed_dim 768\
+  --num_heads 12\
+  --mlp_ratio 4
+
+python crack_seg.py\
+  --epochs 50\
+  --model vit_based2\
+  --embed_dim 768\
+  --num_heads 12\
+  --mlp_ratio 8
+
 python inference.py --model vit_based --model_path checkpoints/vit_based_best.pth
 
 python inference.py --model unet --model_path checkpoints/unet_best.pth
@@ -41,12 +56,139 @@ CRACKLEN
 python train_eval_crack_len.py\
   --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
   --model unet\
+  --train_mode joint\
   --seg_ckpt checkpoints/unet_best.pth\
   --epochs 100\
   --max_steps 2
 
 python train_eval_crack_len.py\
   --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model unet\
+  --seg_ckpt checkpoints/unet_best.pth\
+  --epochs 100\
+  --max_steps 2
+
+
+python train_eval_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
   --model vit_based\
   --seg_ckpt checkpoints/vit_based_best.pth\
   --epochs 100
+
+
+python train_eval_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model unet_resnet\
+  --seg_ckpt checkpoints/unet_resnet_lr_0.0001_bs_32_best.pth\
+  --epochs 500\
+  --train_mode len_only 
+
+
+  --max_steps 2
+
+python vlm_crack_len.py \
+    --root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final \
+    --batch_size 4 \
+    --out_csv results/llava_pred.csv
+
+python vlm_crack_len.py \
+    --root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final \
+    --model llava-1.5-7b \
+    --out_csv results/vlm_pred.csv\
+    --out_json results/llava_len_pred.json
+  
+
+python vlm_crack_len.py \
+    --root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final \
+    --batch_size 4 \
+    --model qwen2.5-vl \
+    --out_csv results/vlm_pred.csv\
+    --out_json results/qwen_len_pred.json
+
+python deepseek_crack_len.py \
+    --root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final \
+    --batch_size 4 \
+    --out_csv results/vlm_pred.csv\
+    --out_json results/deepseek_len_pred.json
+  
+
+# unet freeze 
+
+python inference_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model unet\
+  --ckpt checkpoints/unet_freeze_seg_lr0.0001_bs8_best_len_rmse.pth\
+  --out_json results/unet_freeze_len_pred.json
+
+# unet joint 
+python inference_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model unet\
+  --ckpt checkpoints/unet_joint_lr0.0001_bs8_best_len_rmse.pth\
+  --out_json results/unet_joint_len_pred.json
+
+# unet len only 
+python inference_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model unet\
+  --ckpt checkpoints/unet_len_only_lr0.0001_bs8_best_len_rmse.pth\
+  --out_json results/unet_len_only_len_pred.json
+
+# vit based freeze
+python inference_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model vit_based\
+  --ckpt checkpoints/vit_based_freeze_seg_lr0.0001_bs8_best_len_rmse.pth\
+  --out_json results/vit_based_freeze_len_pred.json
+
+
+# vit based joint 
+python inference_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model vit_based\
+  --ckpt checkpoints/vit_based_joint_lr0.0001_bs8_best_len_rmse.pth\
+  --out_json results/vit_based_joint_len_pred.json
+
+# vit based len only 
+python inference_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model vit_based\
+  --ckpt checkpoints/vit_based_len_only_lr0.0001_bs8_best_len_rmse.pth\
+  --out_json results/vit_based_len_only_len_pred.json
+
+#unet resnet freeze 
+python inference_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model unet_resnet\
+  --ckpt checkpoints/unet_resnet_freeze_seg_lr0.0001_bs8_best_len_rmse.pth\
+  --out_json results/unet_resnet_freeze_len_pred.json
+
+#unet resnet joint 
+python inference_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model unet_resnet\
+  --ckpt checkpoints/unet_resnet_joint_lr0.0001_bs8_best_len_rmse.pth\
+  --out_json results/unet_resnet_joint_len_pred.json
+
+#only len 
+python inference_crack_len.py\
+  --kaggle_root dataset/kaggle/datasets/maksimlitvinov39/crack-final-data/versions/1/crack_final\
+  --model unet_resnet\
+  --ckpt checkpoints/unet_resnet_len_only_lr0.0001_bs8_best_len_rmse.pth\
+  --out_json results/unet_resnet_len_only_len_pred.json
+
+
+python debug_inference.py\
+  --model vit_based\
+  --model_path checkpoints/vit_based_lr_0.0001_bs_4_last.pth\
+  --embed_dim 768\
+  --num_heads 12\
+  --mlp_ratio 4
+
+
+python evaluation_sam3_cliou.py \
+    test \
+    --datapath dataset/omnicrack30k \
+    --pred_root external/sam3/results/sam3_inference \
+    --tolerance 4 \
+    --texpath results_sam3.tex

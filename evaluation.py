@@ -163,6 +163,11 @@ if __name__ == "__main__":
     parser.add_argument('--datapath', default="/mnt/home/irshaid2/crack_seg/omnicrack30k", help="Path to root folder of omnicrack30k dataset.")
     parser.add_argument('--model', type=str, default="unet_resnet", choices=['unet', 'vit_based', 'unet_resnet'], help="Model type to evaluate.")
     parser.add_argument('-c', '--checkpoints', type=str, default="checkpoints/unet_resnet_lr_0.0001_bs_32_best.pth", help="Path to the trained model checkpoint.")
+    
+    parser.add_argument('--embed_dim', type=int, default=128, help="Embedding dimension for ViT-based model.")
+    parser.add_argument('--num_heads', type=int, default=4, help="Number of attention heads for ViT-based model.")
+    parser.add_argument('--mlp_ratio', type=float, default=4.0, help="MLP ratio for ViT-based model.")
+    
     args = parser.parse_args()
 
     run_evaluation(Path(args.datapath), args.texpath, args.checkpoints, args.model, args.split, args.subset, args.tolerance, args.planpath, args.folds)

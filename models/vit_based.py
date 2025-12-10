@@ -218,3 +218,4 @@ class CrackSegMixtureModel(nn.Module):
         pixel_logits = weighted.sum(dim=1, keepdim=True)
 
         return pixel_logits
+
