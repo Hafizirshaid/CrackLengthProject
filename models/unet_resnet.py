@@ -22,16 +22,11 @@ class DoubleConv(nn.Module):
 
 
 class UpBlock(nn.Module):
-	def __init__(self, in_ch, skip_ch, out_ch, bilinear=True):
+	def __init__(self, in_ch, skip_ch, out_ch):
 		super().__init__()
-		self.bilinear = bilinear
-		if bilinear:
-			self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-			self.conv = DoubleConv(in_ch + skip_ch, out_ch)
-		else:
-			# use ConvTranspose2d to upsample
-			self.up = nn.ConvTranspose2d(in_ch, in_ch // 2, kernel_size=2, stride=2)
-			self.conv = DoubleConv((in_ch // 2) + skip_ch, out_ch)
+		self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+		self.conv = DoubleConv(in_ch + skip_ch, out_ch)
+	
 
 	def forward(self, x, skip):
 		x = self.up(x)
@@ -51,10 +46,10 @@ class UNetResNet50(nn.Module):
 	- Returns raw logits (no sigmoid/softmax). Use appropriate loss (BCEWithLogitsLoss, CrossEntropyLoss).
 	"""
 
-	def __init__(self, num_classes=1, pretrained=True, freeze_encoder=False, bilinear=True):
+	def __init__(self, num_classes=1, pretrained=True):
 		super().__init__()
 		self.num_classes = num_classes
-		self.bilinear = bilinear
+
 
 		resnet = models.resnet50(pretrained=pretrained)
 
@@ -70,27 +65,15 @@ class UNetResNet50(nn.Module):
 		self.encoder_layer3 = resnet.layer3
 		self.encoder_layer4 = resnet.layer4
 
-		if freeze_encoder:
-			for param in self.encoder_conv1.parameters():
-				param.requires_grad = False
-			for param in self.encoder_layer1.parameters():
-				param.requires_grad = False
-			for param in self.encoder_layer2.parameters():
-				param.requires_grad = False
-			for param in self.encoder_layer3.parameters():
-				param.requires_grad = False
-			for param in self.encoder_layer4.parameters():
-				param.requires_grad = False
-
 		# Decoder / upsampling blocks
 		# Channel sizes from ResNet-50: conv1->64, layer1->256, layer2->512, layer3->1024, layer4->2048
 		self.center = DoubleConv(2048, 2048)
 
-		self.up4 = UpBlock(in_ch=2048, skip_ch=1024, out_ch=1024, bilinear=bilinear)
-		self.up3 = UpBlock(in_ch=1024, skip_ch=512, out_ch=512, bilinear=bilinear)
-		self.up2 = UpBlock(in_ch=512, skip_ch=256, out_ch=256, bilinear=bilinear)
+		self.up4 = UpBlock(in_ch=2048, skip_ch=1024, out_ch=1024)
+		self.up3 = UpBlock(in_ch=1024, skip_ch=512, out_ch=512)
+		self.up2 = UpBlock(in_ch=512, skip_ch=256, out_ch=256)
 		# After conv1 the channel is 64, but conv1 is before maxpool. We'll use conv1 output as skip.
-		self.up1 = UpBlock(in_ch=256, skip_ch=64, out_ch=128, bilinear=bilinear)
+		self.up1 = UpBlock(in_ch=256, skip_ch=64, out_ch=128)
 
 		# Final up to original resolution (optional extra upsample)
 		self.up0 = nn.Sequential(
@@ -136,6 +119,6 @@ class UNetResNet50(nn.Module):
 		return logits
 
 
-def get_unet_resnet50(num_classes=2, pretrained=True, freeze_encoder=False, bilinear=True):
-	return UNetResNet50(num_classes=num_classes, pretrained=pretrained, freeze_encoder=freeze_encoder, bilinear=bilinear)
+def get_unet_resnet50(num_classes=2, pretrained=True):
+	return UNetResNet50(num_classes=num_classes, pretrained=pretrained)
 

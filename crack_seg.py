@@ -3,8 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.unet import UNet
 from models.vit_based import CrackSegMixtureModel as ViTBasedSegModel
-#from models.vit_based import CrackSegMixtureModel2 as ViTBasedSegModel2
-from models.mask_rcnn import get_model_instance_segmentation
 from models.unet_resnet import get_unet_resnet50
 from dataset import OmniCrackDataset
 from torch.utils.data import DataLoader
@@ -17,37 +15,30 @@ from tqdm import tqdm
 import argparse
 import numpy as np
 import random
+from transform.crack_seg_transform import CrackSegTrainTransform, CrackSegValTransform
 
 def set_seed(seed):
     """Sets the random seed for reproducibility across multiple libraries."""
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed) # for multi-GPU setups
+        torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
-
-    # For deterministic CUDA operations (may impact performance)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-# Example usage:
-fixed_seed = 42
-set_seed(fixed_seed)
+set_seed(42)
 
-
-# ============================================================
-# LOSSES & METRICS
-# ============================================================
 def dice_loss(logits, target, eps=1e-6):
     probs = torch.sigmoid(logits)
     target = target.unsqueeze(1)
 
-    inter = (probs * target).sum((2,3))
-    union = probs.sum((2,3)) + target.sum((2,3))
+    inter = (probs * target).sum((2, 3))
+    union = probs.sum((2, 3)) + target.sum((2, 3))
 
-    dice = (2*inter + eps) / (union + eps)
+    dice = (2 * inter + eps) / (union + eps)
     return 1 - dice.mean()
 
 
@@ -90,11 +81,8 @@ def compute_dice(logits, target):
     return dice.mean().item()
 
 
-# ============================================================
-# TRAINING LOOP
-# ============================================================
 def train_unet(args=None):
-    root = "dataset/omnicrack30k"   # TODO: CHANGE THIS
+    root = "/mnt/home/irshaid2/crack_seg/omnicrack30k"
     img_size = 256
     batch_size = args.batch_size
     lr = args.lr
@@ -108,10 +96,14 @@ def train_unet(args=None):
     model_name = f"{args.model}_lr_{lr}_bs_{batch_size}"
     os.makedirs("checkpoints", exist_ok=True)
     print("=======================================")
+    
+    train_transform = CrackSegTrainTransform(img_size=img_size)
+    val_transform = CrackSegValTransform(img_size=img_size)
 
-    train_ds = OmniCrackDataset(root, split="training", img_size=img_size)
-    val_ds   = OmniCrackDataset(root, split="validation", img_size=img_size)
-    test_ds = OmniCrackDataset(root, split="test", img_size=img_size)
+    train_ds = OmniCrackDataset(root, split="training", img_size=img_size, transform=train_transform)
+    val_ds   = OmniCrackDataset(root, split="validation", img_size=img_size, transform=val_transform)
+    test_ds = OmniCrackDataset(root, split="test", img_size=img_size, transform=val_transform)
+
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=4)
     val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=4)
@@ -120,17 +112,15 @@ def train_unet(args=None):
     if args.model == 'unet':
         model = UNet().to(device)
     elif args.model == 'vit_based':
-        model = ViTBasedSegModel(embed_dim=args.embed_dim, num_heads=args.num_heads, mlp_ratio=args.mlp_ratio).to(device)
-    elif args.model == 'vit_based2':
-        model = ViTBasedSegModel2(embed_dim=args.embed_dim, num_heads=args.num_heads, mlp_ratio=args.mlp_ratio).to(device)
-    elif args.model == 'mask_rcnn':
-        model = get_model_instance_segmentation(num_classes=2).to(device)
+        model = ViTBasedSegModel().to(device)
     elif args.model == "unet_resnet":
         model = get_unet_resnet50(num_classes=1, pretrained=True, freeze_encoder=False, bilinear=True).to(device)
     else:
         raise ValueError(f"Unknown model type: {args.model}")
 
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.1, patience=5)
 
     train_losses = []
     val_losses = []
@@ -143,9 +133,10 @@ def train_unet(args=None):
         # ---------------- Train ----------------
         model.train()
         total = 0
-        for imgs, masks in tqdm(train_loader):
+        for imgs, masks, centerlines in tqdm(train_loader):
             imgs = imgs.to(device)
             masks = masks.to(device)
+            centerlines = centerlines.to(device)
 
             opt.zero_grad()
             logits = model(imgs)
@@ -156,8 +147,8 @@ def train_unet(args=None):
             total += loss.item()
 
             step += 1
-            if args.max_steps is not None and step >= args.max_steps:
-                break  # stop early for this epoch
+            # if args.max_steps is not None and step >= args.max_steps:
+            #     break  # stop early for this epoch
         train_loss = total / len(train_loader)
 
         # ---------------- Val ----------------
@@ -168,17 +159,18 @@ def train_unet(args=None):
 
         with torch.no_grad():
             step_val = 0
-            for imgs, masks in tqdm(val_loader):
+            for imgs, masks, centerlines in tqdm(val_loader):
                 imgs = imgs.to(device)
                 masks = masks.to(device)
+                centerlines = centerlines.to(device)
 
                 logits = model(imgs)
                 total += hybrid_loss(logits, masks).item()
                 val_iou += compute_iou(logits, masks)
                 val_dice += compute_dice(logits, masks)
                 step_val += 1
-                if args.max_steps is not None and step_val >= args.max_steps:
-                    break  # stop early for this epoch
+                # if args.max_steps is not None and step_val >= args.max_steps:
+                #     break  # stop early for this epoch
         val_loss = total / len(val_loader)
         val_iou /= len(val_loader)
         val_dice /= len(val_loader)
@@ -189,10 +181,13 @@ def train_unet(args=None):
         train_losses.append(train_loss)
         val_losses.append(val_loss)
 
+        # Update scheduler
+        scheduler.step(val_loss)
+
         # Save best model
         if val_loss < best_loss:
             best_loss = val_loss
-            torch.save(model.state_dict(), f"checkpoints/{model_name}_best.pth")
+            torch.save(model.state_dict(), f"checkpoints/{model_name}_epoch_{epochs}_aug_2_best.pth")
             print(" -> Saved new BEST model!")
 
         # ---------------- Plot Loss Curve ----------------
@@ -205,31 +200,44 @@ def train_unet(args=None):
         plt.title("U-Net Training Curve")
         plt.legend()
         plt.grid(True)
-        plt.savefig(f"loss_curve_{model_name}.png", dpi=200)
+        plt.savefig(f"loss_curve_{model_name}_aug_2_epoch_{epochs}.png", dpi=200)
         plt.show()
 
-
     # Save final model
-    torch.save(model.state_dict(), f"checkpoints/{model_name}_last.pth")
+    torch.save(model.state_dict(), f"checkpoints/{model_name}_aug_2_last.pth")
     print("Training finished.")
-    print(f"Saved loss_curve_{model_name}.png")
+    print(f"Saved loss_curve_{model_name}_aug_epoch_{epochs}.png")
 
     # test
     model.eval()
     test_iou = 0
     test_dice = 0
+    test_centerline_iou_1px = 0
+    test_centerline_iou_2px = 0
+    test_centerline_iou_3px = 0
+    test_centerline_iou_4px = 0
 
     with torch.no_grad():
-        for imgs, masks in tqdm(test_loader):
+        for imgs, masks, centerlines in tqdm(test_loader):
             imgs = imgs.to(device)
             masks = masks.to(device)
+            centerlines = centerlines.to(device)
 
             logits = model(imgs)
             test_iou += compute_iou(logits, masks)
+            test_centerline_iou_1px += centerline_iou(logits, centerlines, 1)
+            test_centerline_iou_2px += centerline_iou(logits, centerlines, 2)
+            test_centerline_iou_3px += centerline_iou(logits, centerlines, 3)
+            test_centerline_iou_4px += centerline_iou(logits, centerlines, 4)
+
             test_dice += compute_dice(logits, masks)
 
     print("=======================================")
     print(f"Test IoU: {test_iou / len(test_loader):.4f}")
+    print(f"Test Centerline IoU (1px): {test_centerline_iou_1px / len(test_loader):.4f}")
+    print(f"Test Centerline IoU (2px): {test_centerline_iou_2px / len(test_loader):.4f}")
+    print(f"Test Centerline IoU (3px): {test_centerline_iou_3px / len(test_loader):.4f}")
+    print(f"Test Centerline IoU (4px): {test_centerline_iou_4px / len(test_loader):.4f}")
     print(f"Test Dice: {test_dice / len(test_loader):.4f}")
     print(f"learning rate: {lr}, batch size: {batch_size}, img size: {img_size}")
     print("=======================================")
@@ -237,15 +245,9 @@ def train_unet(args=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train U-Net for crack segmentation")
     parser.add_argument('--epochs', type=int, default=40, help='Number of training epochs')
-    parser.add_argument('--max_steps', type=int, default=None, help='Maximum training steps (overrides epochs if set)')
-    parser.add_argument('--model', type=str, default='unet_resnet', choices=['unet', 'vit_based', 'mask_rcnn', 'unet_resnet', 'vit_based2'], help='Model type to train')
+    # parser.add_argument('--max_steps', type=int, default=None, help='Maximum training steps (overrides epochs if set)')
+    parser.add_argument('--model', type=str, default='unet_resnet', choices=['unet', 'vit_based', 'unet_resnet'], help='Model type to train')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--batch_size', type=int, default=4, help='Batch size for training')
-
-    parser.add_argument('--embed_dim', type=int, default=128, help='Embedding dimension for ViT-based model')
-    parser.add_argument('--num_heads', type=int, default=4, help='Number of attention heads for ViT-based model')
-    parser.add_argument('--mlp_ratio', type=float, default=4.0, help='MLP ratio for ViT-based model')
-
-
     args = parser.parse_args()
     train_unet(args)

@@ -11,6 +11,8 @@ from torchvision.transforms import Normalize
 from PIL import Image
 import torchvision.transforms as T
 from skimage.morphology import thin
+from models.vit_based import CrackSegMixtureModel as ViTBasedSegModel
+from models.unet import UNet
 
 # from omnicrack30k.inference import OmniCrack30kModel
 
@@ -49,8 +51,6 @@ def run_evaluation(datapath, texpath, checkpoints, model, split, subset=None, to
         predictor = UNet().to(device)
     elif model == 'vit_based':
         predictor = ViTBasedSegModel().to(device)
-    elif model == 'mask_rcnn':
-        predictor = get_model_instance_segmentation(num_classes=2).to(device)
     elif model == "unet_resnet":
         predictor = get_unet_resnet50(num_classes=1,
                                   pretrained=True,
@@ -159,16 +159,12 @@ if __name__ == "__main__":
     parser.add_argument('-t', '--tolerance', type=int, default=4, help="Tolerance of the clIoU.")
     parser.add_argument('-p', '--planpath', type=str, default=None, help="Path to the plan, i.e. model and weights.")
     parser.add_argument('-f', '--folds', nargs="+", type=int, default=(0, 1, 2, 3, 4), help="Folds for ensemble.")
-    parser.add_argument('-tp', '--texpath', type=str, default='results.tex', help="Path to latex output file, if desired.")
+    # parser.add_argument('-tp', '--texpath', type=str, default='results.tex', help="Path to latex output file, if desired.")
     parser.add_argument('--datapath', default="/mnt/home/irshaid2/crack_seg/omnicrack30k", help="Path to root folder of omnicrack30k dataset.")
     parser.add_argument('--model', type=str, default="unet_resnet", choices=['unet', 'vit_based', 'unet_resnet'], help="Model type to evaluate.")
     parser.add_argument('-c', '--checkpoints', type=str, default="checkpoints/unet_resnet_lr_0.0001_bs_32_best.pth", help="Path to the trained model checkpoint.")
-    
-    parser.add_argument('--embed_dim', type=int, default=128, help="Embedding dimension for ViT-based model.")
-    parser.add_argument('--num_heads', type=int, default=4, help="Number of attention heads for ViT-based model.")
-    parser.add_argument('--mlp_ratio', type=float, default=4.0, help="MLP ratio for ViT-based model.")
-    
     args = parser.parse_args()
+    textpath = f"results_vit_based_lr_0.0001_bs_8_best_{args.split}.tex"
 
-    run_evaluation(Path(args.datapath), args.texpath, args.checkpoints, args.model, args.split, args.subset, args.tolerance, args.planpath, args.folds)
+    run_evaluation(Path(args.datapath), textpath, args.checkpoints, args.model, args.split, args.subset, args.tolerance, args.planpath, args.folds)
     
