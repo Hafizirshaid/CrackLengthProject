@@ -1,4 +1,4 @@
-# CrackLengthProject
+# Crack Segmentation and Length Measurement
 
 ## Install requirements
 ```
